@@ -12,6 +12,7 @@ import bellows.ezsp as ezsp
 import bellows.ezsp.v4.types as t
 import bellows.uart as uart
 import bellows.zigbee.application
+import bellows.zigbee.state as app_state
 
 from .async_mock import AsyncMock, MagicMock, PropertyMock, patch, sentinel
 
@@ -33,6 +34,8 @@ def app(monkeypatch, event_loop):
     ezsp.ezsp_version = 7
     ezsp.set_source_route = AsyncMock(return_value=[t.EmberStatus.SUCCESS])
     ezsp.addTransientLinkKey = AsyncMock(return_value=[0])
+    ezsp.readCounters = AsyncMock(return_value=[[0] * 10])
+    ezsp.readAndClearCounters = AsyncMock(return_value=[[0] * 10])
     ezsp.setPolicy = AsyncMock(return_value=[0])
     ezsp.get_board_info = AsyncMock(
         return_value=("Mock Manufacturer", "Mock board", "Mock version")
@@ -40,6 +43,7 @@ def app(monkeypatch, event_loop):
     type(ezsp).is_ezsp_running = PropertyMock(return_value=True)
     config = bellows.zigbee.application.ControllerApplication.SCHEMA(APP_CONFIG)
     ctrl = bellows.zigbee.application.ControllerApplication(config)
+
     ctrl._ezsp = ezsp
     monkeypatch.setattr(bellows.zigbee.application, "APS_ACK_TIMEOUT", 0.1)
     ctrl._ctrl_event.set()
@@ -68,7 +72,17 @@ def ieee(init=0):
 @patch("bellows.zigbee.application.ControllerApplication._watchdog", new=AsyncMock())
 async def _test_startup(app, nwk_type, ieee, auto_form=False, init=0, ezsp_version=4):
     async def mockezsp(*args, **kwargs):
-        return [0, nwk_type, sentinel.nework_parameters]
+        network_params = t.EmberNetworkParameters(
+            t.ExtendedPanId.convert("ff:7b:aa:bb:cc:dd:ee:ff"),
+            panId=0xD539,
+            radioTxPower=8,
+            radioChannel=20,
+            joinMethod=t.EmberJoinMethod.USE_MAC_ASSOCIATION,
+            nwkManagerId=0x1234,
+            nwkUpdateId=22,
+            channels=t.Channels.ALL_CHANNELS,
+        )
+        return [0, nwk_type, network_params]
 
     async def mock_leave(*args, **kwargs):
         app._ezsp.handle_callback("stackStatusHandler", [t.EmberStatus.NETWORK_DOWN])
@@ -115,7 +129,9 @@ async def test_startup(app, ieee):
 
 
 async def test_startup_ezsp_ver7(app, ieee):
+    app.state.counters["ezsp_counters"] = MagicMock()
     await _test_startup(app, t.EmberNodeType.COORDINATOR, ieee, ezsp_version=7)
+    assert app.state.counters["ezsp_counters"].reset.call_count == 1
 
 
 async def test_startup_no_status(app, ieee):
@@ -711,34 +727,53 @@ async def test_reset_controller_routine(app):
     assert app.startup.call_count == 1
 
 
-async def test_watchdog(app, monkeypatch):
+@pytest.mark.parametrize("ezsp_version", (4, 7))
+async def test_watchdog(app, monkeypatch, ezsp_version):
     from bellows.zigbee import application
 
+    ezsp_counters = app_state.Counters(
+        "ezsp_counters", (a.name[8:] for a in t.EmberCounterType)
+    )
+    app.state.counters[ezsp_counters.name] = ezsp_counters
+
     monkeypatch.setattr(application, "WATCHDOG_WAKE_PERIOD", 0.01)
-    nop_success = 3
+    monkeypatch.setattr(application, "EZSP_COUNTERS_CLEAR_IN_WATCHDOG_PERIODS", 2)
+    nop_success = 7
+    app._ezsp.ezsp_version = ezsp_version
 
     async def nop_mock():
         nonlocal nop_success
         if nop_success:
             nop_success -= 1
-            if nop_success % 2:
+            if nop_success % 3:
                 raise EzspError
             else:
-                return
+                return ([0] * 10,)
         raise asyncio.TimeoutError
 
     app._ezsp.nop = AsyncMock(side_effect=nop_mock)
+    app._ezsp.readCounters = AsyncMock(side_effect=nop_mock)
+    app._ezsp.readAndClearCounters = AsyncMock(side_effect=nop_mock)
     app._handle_reset_request = MagicMock()
     app._ctrl_event.set()
 
     await app._watchdog()
 
-    assert app._ezsp.nop.call_count > 4
+    if ezsp_version == 4:
+        assert app._ezsp.nop.await_count > 4
+    else:
+        assert app._ezsp.readCounters.await_count >= 4
+
     assert app._handle_reset_request.call_count == 1
 
 
 async def test_watchdog_counters(app, monkeypatch, caplog):
     from bellows.zigbee import application
+
+    ezsp_counters = app_state.Counters(
+        "ezsp_counters", (a.name[8:] for a in app._ezsp.types.EmberCounterType)
+    )
+    app.state.counters[ezsp_counters.name] = ezsp_counters
 
     monkeypatch.setattr(application, "WATCHDOG_WAKE_PERIOD", 0.01)
     nop_success = 3
