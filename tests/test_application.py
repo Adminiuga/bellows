@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 import pytest
+import zigpy.application.state as app_state
 import zigpy.config
 from zigpy.device import Device
 from zigpy.zcl.clusters import security
@@ -12,7 +13,6 @@ import bellows.ezsp as ezsp
 import bellows.ezsp.v4.types as t
 import bellows.uart as uart
 import bellows.zigbee.application
-import bellows.zigbee.state as app_state
 
 from .async_mock import AsyncMock, MagicMock, PropertyMock, patch, sentinel
 
