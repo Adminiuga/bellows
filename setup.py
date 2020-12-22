@@ -22,7 +22,7 @@ setup(
         "pyserial",
         "pyserial-asyncio",
         "voluptuous",
-        "zigpy @ git+https://github.com/Adminiuga/zigpy@ac/app-state-counters#egg=zigpy-0.29.0.dev0",
+        "zigpy @ git+https://github.com/Adminiuga/zigpy@ac/app-state-counters-default-dict#egg=zigpy-0.29.0.dev0",
     ],
     dependency_links=[
         "https://codeload.github.com/rcloran/pure-pcapy-3/zip/master",
